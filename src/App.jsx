@@ -1,18 +1,17 @@
 import React, { useMemo, useState, useEffect } from "react";
+import {
+  ResponsiveContainer, BarChart, Bar, XAxis, YAxis,
+  Tooltip, Legend, LabelList, CartesianGrid
+} from "recharts";
 
 /**
- * Dynasty Trade Calculator — Multi-Team + CSV import (FantasyPros players + Draft pick slots)
- * - Teams: add/remove, add players/picks, rename
- * - League settings: PPR/Half/Standard (label only), Superflex, TE Premium, League size
- * - Value sources: Demo / FantasyPros / Blend (with slider)
- * - KTC-like package adjustment (decay)
- * - Numeric diff (adjusted)
- * - Suggestions to make it even (prefer Any / Players / Picks; tolerance slider)
- * - Import FantasyPros Players CSV: Name/Player, Team, Position, Age(optional), Value, SF Value
- * - Import Draft Picks CSV per YEAR: Round (e.g., 1.01), Value, SF Value → auto-avg per round
+ * Dynasty Trade Calculator — Multi-Team + CSV import + Stacked Chart
+ * - Multi-source ready (Demo + FantasyPros; easily extendable to KTC/Roto).
+ * - Superflex/TEP toggles, KTC-like package adjustment, suggestions.
+ * - CSV importers: FantasyPros Players, Draft Pick YEAR+slot (1.01 etc).
+ * - NEW: Stacked bar chart with per-team total labels (uses adjusted totals).
  */
 
-// ---------------- Utils ----------------
 const uid = () => Math.random().toString(36).slice(2, 9);
 const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
 const YEAR = new Date().getFullYear();
@@ -38,7 +37,7 @@ const DEMO = [
   { name: "Travis Kelce", position: "TE", age: 35, mkt_1qb: 260, mkt_sf: 260 },
 ];
 
-// ---------------- Pick Curve (round-level fallback) ----------------
+// ---------------- Helpers ----------------
 const ROUND_KEYS = ["1st", "2nd", "3rd", "4th", "5th"];
 const basePickCurve = ({ superflex, tePremium }) => {
   const oneQB = { "1st": 600, "2nd": 220, "3rd": 90, "4th": 40, "5th": 20 };
@@ -52,8 +51,6 @@ const slotToRoundKey = (slot) => {
   const rn = Number(String(slot).split(".")[0]);
   return ({1:"1st",2:"2nd",3:"3rd",4:"4th",5:"5th"})[rn] || "1st";
 };
-
-// ---------------- CSV parsing (simple, comma-separated; quoted fields not required) ----------------
 function parseCSV(text) {
   const lines = text.split(/\r?\n/).filter(Boolean);
   if (!lines.length) return [];
@@ -67,12 +64,79 @@ function parseCSV(text) {
   }
   return rows;
 }
+const norm = (s="") => String(s).toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+
+// ---------------- Chart ----------------
+function StackedTeamChart({ teams, getValue, label="Team Totals (Adjusted)", getAdjustedTotalForTeam }) {
+  const maxSegs = Math.max(0, ...teams.map(t => (t.items?.length || 0)));
+  const palette = ["#2563eb","#22c55e","#f97316","#a855f7","#06b6d4","#e11d48","#84cc16","#0ea5e9","#f59e0b","#10b981"];
+
+  const data = teams.map(t => {
+    const vals = (t.items || []).map(it => ({
+      name: it.type === "player" ? (it.name || "Player") : `${it.year} ${it.round}`,
+      value: Math.max(0, Number(getValue(it)) || 0)
+    })).sort((a,b)=>b.value-a.value);
+
+    const row = { team: t.name, total: getAdjustedTotalForTeam ? getAdjustedTotalForTeam(t) : vals.reduce((s,x)=>s+x.value,0) };
+    for (let i=0;i<maxSegs;i++){
+      row[`seg${i}`] = vals[i]?.value || 0;
+      row[`seg${i}_label`] = vals[i]?.name || "";
+    }
+    return row;
+  });
+
+  const bars = [];
+  for (let i=0;i<maxSegs;i++){
+    const color = palette[i % palette.length];
+    bars.push(
+      <Bar key={`seg-${i}`} dataKey={`seg${i}`} stackId="stack" fill={color} isAnimationActive={false} />
+    );
+  }
+
+  return (
+    <div style={{border:"1px solid #e5e7eb", borderRadius:12, padding:12, background:"#fff"}}>
+      <div style={{fontWeight:700, marginBottom:8}}>{label}</div>
+      <div style={{width:"100%", height:320}}>
+        <ResponsiveContainer>
+          <BarChart data={data} margin={{ top: 12, right: 16, left: 0, bottom: 12 }}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="team" />
+            <YAxis />
+            <Tooltip formatter={(val, key, ctx) => {
+              if (String(key).startsWith("seg")) {
+                const idx = Number(String(key).replace("seg",""));
+                const name = ctx?.payload?.[`seg${idx}_label`] || "Asset";
+                return [val, name];
+              }
+              if (key === "total") return [val, "Team Total (Adjusted)"];
+              return [val, key];
+            }}/>
+            <Legend payload={[
+              { value: "Team Total (Adjusted)", id: "total", type: "line", color: "#111" },
+              { value: "Assets (stacked)", id: "stack", type: "square", color: "#2563eb" }
+            ]}/>
+            <Bar dataKey="total" fill="transparent" isAnimationActive={false}>
+              <LabelList dataKey="total" position="top"
+                formatter={(v)=>(v?v.toLocaleString():"")}
+                style={{ fontFamily:"ui-monospace,Menlo,monospace", fontSize:12, fill:"#111" }}
+              />
+            </Bar>
+            {bars}
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <div style={{fontSize:12, opacity:.7, marginTop:6}}>
+        Stacks show per-asset raw sizes; labels show KTC-adjusted team totals.
+      </div>
+    </div>
+  );
+}
 
 // ---------------- App ----------------
 export default function App() {
   // League settings
   const [settings, setSettings] = useState({
-    scoringMode: "PPR",     // PPR / Half PPR / Standard (label only for now)
+    scoringMode: "PPR",
     superflex: true,
     tePremium: false,
     leagueSize: 12,
@@ -86,25 +150,22 @@ export default function App() {
     { id: uid(), name: "Team B", items: [] },
   ]);
 
-  // Value source
+  // Value source toggles (Demo + FantasyPros for now)
   const [valueSource, setValueSource] = useState("Demo"); // Demo | FantasyPros | Blend
-  const [blendWeight, setBlendWeight] = useState(0.5);    // used only for Blend
+  const [blendWeight, setBlendWeight] = useState(0.5);
 
-  // FantasyPros (players)
-  const [fpPlayers, setFpPlayers] = useState([]); // rows: {name, team, position, age?, value, sf_value}
+  // FantasyPros players & picks
+  const [fpPlayers, setFpPlayers] = useState([]); // {name, position, value, sf_value}
+  const [fpPicks, setFpPicks] = useState({});     // { [year]: { slots:{}, rounds:{ "1st":{value,sf_value} } } }
 
-  // FantasyPros (picks per year)
-  // fpPicks = { [year]: { slots: {"1.01":{value,sf_value}, ...}, rounds: {"1st":{value,sf_value}, ...} } }
-  const [fpPicks, setFpPicks] = useState({});
-
-  // Persist minimal stuff
+  // Persist a bit
   useEffect(()=>{ try { localStorage.setItem("dtc_settings", JSON.stringify(settings)); } catch{} }, [settings]);
   useEffect(()=>{ try { localStorage.setItem("dtc_value_source", JSON.stringify(valueSource)); } catch{} }, [valueSource]);
   useEffect(()=>{ try { localStorage.setItem("dtc_blend_weight", JSON.stringify(blendWeight)); } catch{} }, [blendWeight]);
 
   const pickCurve = useMemo(() => basePickCurve({ superflex: settings.superflex, tePremium: settings.tePremium }), [settings.superflex, settings.tePremium]);
 
-  // ---------- Team ops ----------
+  // --- Team ops
   const addTeam = () => setTeams(t => [...t, { id: uid(), name: `Team ${String.fromCharCode(65+t.length)}`, items: [] }]);
   const removeTeam = (id) => setTeams(t => t.filter(x=>x.id!==id));
   const renameTeam = (id, name) => setTeams(t => t.map(x => x.id===id ? {...x, name} : x));
@@ -117,21 +178,17 @@ export default function App() {
   const updateItem = (teamId, itemId, patch) =>
     setTeams(t => t.map(team => team.id===teamId ? ({...team, items: team.items.map(i => i.id===itemId ? {...i, ...patch} : i)}): team));
 
-  // ---------- Value resolution ----------
-  const norm = (s="") => String(s).toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
-
+  // --- Value resolution
   function demoValueFor(p) {
     const row = DEMO.find(x => x.name === p.name && x.position?.toUpperCase() === (p.position||"").toUpperCase());
     if (!row) return 0;
     return settings.superflex ? row.mkt_sf : row.mkt_1qb;
-    }
-
+  }
   function fpValueFor(p) {
     const row = fpPlayers.find(x => norm(x.name) === norm(p.name) && (x.position||"").toUpperCase() === (p.position||"").toUpperCase());
     if (!row) return 0;
     return settings.superflex ? (Number(row.sf_value)||0) : (Number(row.value)||0);
   }
-
   function resolvePlayerValue(p) {
     const demo = demoValueFor(p);
     const fp   = fpValueFor(p);
@@ -139,32 +196,35 @@ export default function App() {
     if (valueSource === "Blend") return Math.round((1-blendWeight)*demo + blendWeight*fp);
     return demo;
   }
-
+  function valueFromPickMap(m, year, roundKey, slot) {
+    if (!m?.[year]) return 0;
+    const y = m[year];
+    const slotRow  = y.slots?.[slot];
+    const roundRow = y.rounds?.[roundKey] || y.rounds?.[String(slot).split(".")[0]];
+    const base = slotRow
+      ? (settings.superflex ? slotRow.sf_value : slotRow.value)
+      : (roundRow ? (settings.superflex ? roundRow.sf_value : roundRow.value) : 0);
+    return Number(base)||0;
+  }
   function resolvePickValue(item) {
     const roundKey = slotToRoundKey(item.round);
-    let base = pickCurve[roundKey] || 0; // fallback
-    const map = fpPicks[item.year];
-    if (map) {
-      const slotRow = map.slots?.[item.round];
-      const roundRow = map.rounds?.[roundKey];
-      const fpBase = slotRow
-        ? (settings.superflex ? slotRow.sf_value : slotRow.value)
-        : (roundRow ? (settings.superflex ? roundRow.sf_value : roundRow.value) : 0);
+    let base = pickCurve[roundKey] || 0;
+    if (valueSource !== "Demo") {
+      const fpBase = valueFromPickMap(fpPicks, item.year, roundKey, item.round);
       if (valueSource === "FantasyPros") base = fpBase || base;
       if (valueSource === "Blend") base = Math.round((1-blendWeight)*base + blendWeight*(fpBase||base));
     }
     const yearsOut = Number(item.year) - YEAR;
-    const timeDisc = 1 - clamp(0.04 * yearsOut, 0, 0.16); // mild discount for future
+    const timeDisc = 1 - clamp(0.04 * yearsOut, 0, 0.16);
     return Math.round(base * timeDisc);
   }
-
   function computeItemValue(item) {
     if (item.type === "player") return resolvePlayerValue(item);
     if (item.type === "pick")   return resolvePickValue(item);
     return 0;
   }
 
-  // ---------- Totals ----------
+  // --- Totals
   const teamRaw = teams.map(t => {
     const values = t.items.map(it => computeItemValue(it));
     const total  = values.reduce((s,v)=>s+v,0);
@@ -179,14 +239,13 @@ export default function App() {
     const adj = Math.round(sorted.reduce((s,v,i)=> s + v*Math.pow(ktcDecay, i), 0));
     return { ...t, adj };
   });
-
   const grandAdj = teamAdj.reduce((s,t)=>s+t.adj,0);
   const avgAdj = teams.length ? Math.round(grandAdj/teams.length) : 0;
 
-  // ---------- Suggestions ----------
-  const [pref, setPref] = useState("any");    // any | players | picks
-  const [tol, setTol]   = useState(0.10);     // ±10%
-  // Build suggestion pool
+  // --- Suggestions
+  const [pref, setPref] = useState("any"); // any | players | picks
+  const [tol, setTol]   = useState(0.10);  // ±10%
+
   const poolPlayers = DEMO.map(d => ({
     key: `P|${d.name}`,
     type: "player",
@@ -194,15 +253,12 @@ export default function App() {
     position: d.position,
     value: settings.superflex ? d.mkt_sf : d.mkt_1qb
   }));
-  const poolPicks = (() => {
-    // Use next-year round curve as default suggestions
-    return ["1st","2nd","3rd","4th","5th"].map(r => ({
-      key: `K|${YEAR+1}|${r}`,
-      type: "pick",
-      name: `${YEAR+1} ${r}`,
-      value: pickCurve[r]
-    }));
-  })();
+  const poolPicks = ["1st","2nd","3rd","4th","5th"].map(r => ({
+    key: `K|${YEAR+1}|${r}`,
+    type: "pick",
+    name: `${YEAR+1} ${r}`,
+    value: pickCurve[r]
+  }));
   let pool = [...poolPlayers, ...poolPicks].sort((a,b)=>a.value-b.value);
   if (pref === "players") pool = pool.filter(x=>x.type==="player").concat(pool.filter(x=>x.type==="pick"));
   if (pref === "picks")   pool = pool.filter(x=>x.type==="pick").concat(pool.filter(x=>x.type==="player"));
@@ -210,25 +266,21 @@ export default function App() {
   function suggestForDelta(delta) {
     const need = Math.abs(delta);
     const lo = need * (1 - tol), hi = need * (1 + tol);
-    // single
     const one = pool.find(x => x.value >= lo && x.value <= hi);
     if (one) return [one];
-    // small pair greedy
     for (let i=0;i<pool.length;i++) {
       for (let j=i;j<Math.min(pool.length,i+80);j++) {
         const s = pool[i].value + pool[j].value;
         if (s >= lo && s <= hi) return [pool[i], pool[j]];
       }
     }
-    // fallback: closest single
     let best = pool[0];
     for (const x of pool) if (Math.abs(x.value - need) < Math.abs(best.value - need)) best = x;
     return [best];
   }
 
-  // ---------- Importers ----------
+  // --- Importers handlers
   function onImportFPPlayers(rows) {
-    // Normalize: {name, team, position, age?, value, sf_value}
     const out = rows.map(r => ({
       name: r.name || r.player || "",
       team: r.team || "",
@@ -239,17 +291,14 @@ export default function App() {
     })).filter(x => x.name && x.position);
     setFpPlayers(out);
   }
-
   function onImportFPPicks(year, map) {
-    // map: { slots: {"1.01":{value,sf_value}}, rounds: {"1":{value,sf_value}, ...} }
-    // Convert round numbers "1","2" to "1st","2nd"...
+    // Convert rounds keyed by number "1" to "1st" etc
     const rounds = {};
     Object.keys(map.rounds||{}).forEach(rn => {
       const key = ({1:"1st",2:"2nd",3:"3rd",4:"4th",5:"5th"})[Number(rn)] || "1st";
       rounds[key] = map.rounds[rn];
     });
     setFpPicks(prev => ({ ...prev, [year]: { slots: map.slots||{}, rounds } }));
-    // Expose to window for slot dropdowns if you later add them
     try { window.__fpPickData = { ...(window.__fpPickData||{}), [year]: { slots: map.slots||{}, rounds } }; } catch {}
   }
 
@@ -263,9 +312,7 @@ export default function App() {
         <div style={grid2}>
           <label>Scoring
             <select value={settings.scoringMode} onChange={e=>setSettings({...settings, scoringMode:e.target.value})} style={input}>
-              <option>PPR</option>
-              <option>Half PPR</option>
-              <option>Standard</option>
+              <option>PPR</option><option>Half PPR</option><option>Standard</option>
             </select>
           </label>
           <label>League Size
@@ -277,9 +324,7 @@ export default function App() {
         <div style={{marginTop:10, display:"flex", gap:16, alignItems:"center", flexWrap:"wrap"}}>
           <label>Value Source
             <select value={valueSource} onChange={e=>setValueSource(e.target.value)} style={input}>
-              <option>Demo</option>
-              <option>FantasyPros</option>
-              <option>Blend</option>
+              <option>Demo</option><option>FantasyPros</option><option>Blend</option>
             </select>
           </label>
           {valueSource==="Blend" && (
@@ -294,7 +339,7 @@ export default function App() {
         </div>
       </section>
 
-      {/* Importers */}
+      {/* Import Values */}
       <section style={card}>
         <h2 style={h2}>Import Values</h2>
         <div style={{display:"flex", gap:16, flexWrap:"wrap"}}>
@@ -302,12 +347,11 @@ export default function App() {
           <ImportFPPicks onLoad={onImportFPPicks}/>
         </div>
         <div style={{fontSize:12, opacity:.7, marginTop:6}}>
-          Players CSV headers: Name/Player, Team, Position, Age(optional), Value, SF Value<br/>
-          Picks CSV headers: Round (like 1.01), Value, SF Value + choose YEAR before uploading.
+          Players CSV: Name/Player, Position, Value, SF Value. &nbsp; Picks CSV: Round (1.01), Value, SF Value (choose YEAR).
         </div>
       </section>
 
-      {/* Teams Manager */}
+      {/* Teams */}
       <section style={card}>
         <h2 style={h2}>Teams</h2>
         <div style={{display:"flex", gap:8, flexWrap:"wrap"}}>
@@ -331,7 +375,7 @@ export default function App() {
                     {it.type === "player" ? (
                       <>
                         <input placeholder="Player name" value={it.name} onChange={e=>updateItem(team.id, it.id, { name:e.target.value })} style={input}/>
-                        <select value={it.position} onChange={e=>updateItem(team.id, it.id, { position:e.target.value })} style={input}>
+                        <select value={it.position} onChange={e=>updateItem(team.id, it id, { position:e.target.value })} style={input}>
                           <option>QB</option><option>RB</option><option>WR</option><option>TE</option>
                         </select>
                         <input placeholder="Age" type="number" value={it.age||""} onChange={e=>updateItem(team.id, it.id, { age: e.target.value? Number(e.target.value): undefined })} style={input}/>
@@ -359,7 +403,7 @@ export default function App() {
           <div style={subcard}>
             <div style={{display:"flex", justifyContent:"space-between"}}><span style={label}>Grand (Adj)</span><span style={mono}>{grandAdj.toLocaleString()}</span></div>
             <div style={{display:"flex", justifyContent:"space-between"}}><span style={label}>Avg / Team (Adj)</span><span style={mono}>{avgAdj.toLocaleString()}</span></div>
-            <div style={{fontSize:12, opacity:.7, marginTop:8}}>Decay = {ktcDecay.toFixed(2)} (2nd piece ~{Math.round(ktcDecay*100)}%, 3rd ~{Math.round(Math.pow(ktcDecay,2)*100)}%).</div>
+            <div style={{fontSize:12, opacity:.7, marginTop:8}}>Decay = {ktcDecay.toFixed(2)} (2nd piece ≈ {Math.round(ktcDecay*100)}%).</div>
           </div>
           <div style={subcard}>
             <div style={{fontWeight:600, marginBottom:6}}>Numeric Diff (Adj)</div>
@@ -386,7 +430,7 @@ export default function App() {
             {teamAdj.map(t=>{
               const delta = t.adj - avgAdj;
               if (Math.abs(delta) <= 1) return <div key={t.id} style={{opacity:.7, fontSize:12}}>{t.name}: already even.</div>;
-              if (delta > 0) return <div key={t.id} style={{opacity:.7, fontSize:12}}>{t.name}: surplus — consider removing a depth piece (package penalty applies).</div>;
+              if (delta > 0) return <div key={t.id} style={{opacity:.7, fontSize:12}}>{t.name}: surplus — consider removing a depth piece.</div>;
               const picks = suggestForDelta(delta);
               return (
                 <div key={t.id}>
@@ -399,6 +443,19 @@ export default function App() {
             })}
           </div>
         </div>
+
+        {/* NEW: Stacked bar chart */}
+        <div style={{marginTop:12}}>
+          <StackedTeamChart
+            teams={teams}
+            label="Team Totals (Adjusted) — Stacked by Asset"
+            getValue={(item) => computeItemValue(item)}                 // segment sizes = raw per-asset contributions
+            getAdjustedTotalForTeam={(team) => {
+              const row = teamAdj.find(x=>x.id===team.id);
+              return row ? row.adj : 0;                                 // label on top = adjusted team total
+            }}
+          />
+        </div>
       </section>
 
       <footer style={{fontSize:12, opacity:.6, marginTop:18}}>
@@ -408,7 +465,7 @@ export default function App() {
   );
 }
 
-// ---------------- Importer Components ----------------
+// ---------------- Importers ----------------
 function ImportFPPlayers({ onLoad }) {
   function handle(e) {
     const file = e.target.files?.[0];
@@ -427,7 +484,7 @@ function ImportFPPlayers({ onLoad }) {
         })).filter(x => x.name && x.position);
         onLoad(rows);
       } catch (e) {
-        alert("Could not parse Players CSV. Expected headers: Name/Player, Team, Position, Value, SF Value");
+        alert("Could not parse Players CSV. Expected headers: Name/Player, Position, Value, SF Value");
       }
     };
     reader.readAsText(file);
@@ -449,14 +506,10 @@ function ImportFPPicks({ onLoad }) {
     reader.onload = () => {
       try {
         const raw = parseCSV(String(reader.result));
-        // Build {slots, rounds} where rounds is keyed by round number ("1","2",...)
-        const slots = {};
-        const buckets = {};
-        raw.forEach(r => {
-          const slot = (r.round||"").trim();
-          if (!slot) return;
-          const v = Number(r.value)||0;
-          const vsf = Number(r["sf value"])||Number(r.sf_value)||v;
+        const slots = {}, buckets = {};
+        raw.forEach(row => {
+          const slot = (row.round||"").trim(); if (!slot) return;
+          const v = Number(row.value)||0, vsf = Number(row["sf value"])||Number(row.sf_value)||v;
           slots[slot] = { value: v, sf_value: vsf };
           const rn = String(slot).split(".")[0];
           (buckets[rn] ||= []).push({ value:v, sf_value:vsf });
@@ -464,16 +517,17 @@ function ImportFPPicks({ onLoad }) {
         const rounds = {};
         Object.keys(buckets).forEach(rn => {
           const arr = buckets[rn];
-          const avg = Math.round(arr.reduce((s,x)=>s+x.value,0)/arr.length);
-          const avgsf = Math.round(arr.reduce((s,x)=>s+x.sf_value,0)/arr.length);
-          rounds[rn] = { value: avg, sf_value: avgsf };
+          rounds[rn] = {
+            value:  Math.round(arr.reduce((s,x)=>s+x.value,0)/arr.length),
+            sf_value: Math.round(arr.reduce((s,x)=>s+x.sf_value,0)/arr.length)
+          };
         });
         onLoad(year, { slots, rounds });
       } catch (e) {
         alert("Could not parse Picks CSV. Expected headers: Round (1.01), Value, SF Value");
       }
     };
-    reader.readAsText(file);
+  reader.readAsText(file);
   }
   return (
     <div style={{display:"flex", alignItems:"center", gap:8}}>
@@ -497,3 +551,4 @@ const btnSm  = { border:"1px solid #d1d5db", borderRadius:6, padding:"4px 6px", 
 const label  = { opacity:.7 };
 const mono   = { fontFamily:"ui-monospace, SFMono-Regular, Menlo, monospace" };
 const uploader = { border:"1px dashed #d1d5db", borderRadius:8, padding:"8px 10px", background:"#f9fafb", cursor:"pointer" };
+
