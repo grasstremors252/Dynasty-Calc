@@ -375,7 +375,7 @@ export default function App() {
                     {it.type === "player" ? (
                       <>
                         <input placeholder="Player name" value={it.name} onChange={e=>updateItem(team.id, it.id, { name:e.target.value })} style={input}/>
-                        <select value={it.position} onChange={e=>updateItem(team.id, it id, { position:e.target.value })} style={input}>
+                        <select value={it.position} onChange={e=>updateItem(team.id, it.id, { position:e.target.value })} style={input}>
                           <option>QB</option><option>RB</option><option>WR</option><option>TE</option>
                         </select>
                         <input placeholder="Age" type="number" value={it.age||""} onChange={e=>updateItem(team.id, it.id, { age: e.target.value? Number(e.target.value): undefined })} style={input}/>
