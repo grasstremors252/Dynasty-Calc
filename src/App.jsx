@@ -6,10 +6,6 @@ import {
 
 /**
  * Dynasty Trade Calculator — Multi-Team + CSV import + Stacked Chart
- * - Multi-source ready (Demo + FantasyPros; easily extendable to KTC/Roto).
- * - Superflex/TEP toggles, KTC-like package adjustment, suggestions.
- * - CSV importers: FantasyPros Players, Draft Pick YEAR+slot (1.01 etc).
- * - NEW: Stacked bar chart with per-team total labels (uses adjusted totals).
  */
 
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -444,15 +440,15 @@ export default function App() {
           </div>
         </div>
 
-        {/* NEW: Stacked bar chart */}
+        {/* Stacked bar chart */}
         <div style={{marginTop:12}}>
           <StackedTeamChart
             teams={teams}
             label="Team Totals (Adjusted) — Stacked by Asset"
-            getValue={(item) => computeItemValue(item)}                 // segment sizes = raw per-asset contributions
+            getValue={(item) => computeItemValue(item)}                 // segments = raw per-asset
             getAdjustedTotalForTeam={(team) => {
               const row = teamAdj.find(x=>x.id===team.id);
-              return row ? row.adj : 0;                                 // label on top = adjusted team total
+              return row ? row.adj : 0;                                 // labels = adjusted totals
             }}
           />
         </div>
@@ -527,7 +523,7 @@ function ImportFPPicks({ onLoad }) {
         alert("Could not parse Picks CSV. Expected headers: Round (1.01), Value, SF Value");
       }
     };
-  reader.readAsText(file);
+    reader.readAsText(file);
   }
   return (
     <div style={{display:"flex", alignItems:"center", gap:8}}>
